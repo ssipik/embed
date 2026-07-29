@@ -19,7 +19,9 @@ __all__ = [
     "point_id",
     "NODE_SEQ_BITS",
     "DENSE_VECTOR",
-    "SPARSE_VECTOR",
+    "SPARSE_VECTOR_DE",
+    "SPARSE_VECTOR_EN",
+    "SPARSE_VECTORS",
 ]
 
 # chunk slots per sighting: 2**20 = 1,048,576
@@ -29,7 +31,17 @@ NODE_SEQ_BITS = 20
 # ambiguity (e.g. dense_e5, sparse_splade). Cross-stage contract: the retrieval
 # stage must query these exact names.
 DENSE_VECTOR = "dense_bge_m3"
-SPARSE_VECTOR = "sparse_bm25"
+SPARSE_VECTOR_DE = "sparse_bm25_de"
+SPARSE_VECTOR_EN = "sparse_bm25_en"
+
+# Sparse field → BM25 analyzer language. Every chunk gets both, whatever language
+# it is in: the analyzer defines the sparse id space, so picking one per document
+# would make matching depend on an ingest-time language guess. Each field keeps its
+# own document-frequency stats, hence its own IDF.
+SPARSE_VECTORS: dict[str, str] = {
+    SPARSE_VECTOR_DE: "german",
+    SPARSE_VECTOR_EN: "english",
+}
 
 
 def point_id(manifest_id: int, node_seq: int) -> int:
@@ -62,9 +74,10 @@ class QdrantWriter:
         """Create the collection (+ the payload index deletion filtering
         needs) on first contact; later calls are no-ops.
 
-        Named vectors: dense (BGE-M3 via TEI, cosine) + sparse (BM25). Sparse
-        has no size — it is dimensionless; Modifier.IDF makes Qdrant apply
-        inverse-document-frequency at query time over the stored term freqs.
+        Named vectors: dense (BGE-M3 via TEI, cosine) + one sparse field per
+        BM25 analyzer (SPARSE_VECTORS). Sparse fields have no size — they are
+        dimensionless; Modifier.IDF makes Qdrant apply inverse-document-frequency
+        at query time over the stored term freqs, per field.
         """
         if self._client.collection_exists(self.collection):
             return
@@ -76,7 +89,8 @@ class QdrantWriter:
                 )
             },
             sparse_vectors_config={
-                SPARSE_VECTOR: models.SparseVectorParams(modifier=models.Modifier.IDF)
+                name: models.SparseVectorParams(modifier=models.Modifier.IDF)
+                for name in SPARSE_VECTORS
             },
         )
         self._client.create_payload_index(

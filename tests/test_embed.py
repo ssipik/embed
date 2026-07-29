@@ -6,7 +6,9 @@ from rag_embed.embed import build_points, ledger_row
 from rag_embed.qdrant import (
     DENSE_VECTOR,
     NODE_SEQ_BITS,
-    SPARSE_VECTOR,
+    SPARSE_VECTOR_DE,
+    SPARSE_VECTOR_EN,
+    SPARSE_VECTORS,
     QdrantWriter,
     point_id,
 )
@@ -27,9 +29,15 @@ def node(mid=1, seq=0, text="hello world"):
     }
 
 
-def sparse_vecs(n):
-    """n placeholder BM25 sparse vectors (one term each)."""
-    return [models.SparseVector(indices=[1], values=[1.0]) for _ in range(n)]
+def sparse_vecs(n, fields=SPARSE_VECTORS):
+    """n placeholder BM25 sparse vectors (one term each) per sparse field.
+
+    Distinct indices per field so a test can tell the two spaces apart.
+    """
+    return {
+        name: [models.SparseVector(indices=[i + 1], values=[1.0]) for _ in range(n)]
+        for i, name in enumerate(fields)
+    }
 
 
 class TestPointIdentity:
@@ -61,13 +69,21 @@ class TestBuildPoints:
     def test_named_dense_and_sparse_vectors(self):
         points = build_points([node()], [[0.1, 0.2]], sparse_vecs(1))
         assert points[0].vector[DENSE_VECTOR] == [0.1, 0.2]
-        assert points[0].vector[SPARSE_VECTOR].indices == [1]
+        assert points[0].vector[SPARSE_VECTOR_DE].indices == [1]
+        assert points[0].vector[SPARSE_VECTOR_EN].indices == [2]
 
     def test_vector_count_mismatch_fails_loudly(self):
         with pytest.raises(ValueError):
             build_points([node()], [], sparse_vecs(0))
         with pytest.raises(ValueError):
             build_points([node()], [[0.1, 0.2]], sparse_vecs(0))
+
+    def test_one_short_sparse_field_fails_loudly(self):
+        # a per-field length bug must not silently truncate the batch
+        vecs = sparse_vecs(2)
+        vecs[SPARSE_VECTOR_EN] = vecs[SPARSE_VECTOR_EN][:1]
+        with pytest.raises(ValueError):
+            build_points([node(seq=0), node(seq=1)], [[0.1, 0.2]] * 2, vecs)
 
 
 class TestTeiClient:
@@ -150,12 +166,21 @@ class TestQdrantWriter:
         w.ensure_collection(2)
         w.ensure_collection(2)
 
-    def test_collection_has_named_dense_and_sparse(self):
+    def test_collection_has_named_dense_and_both_sparse(self):
         w = self.make()
         w.ensure_collection(dense_size=2)
         params = w._client.get_collection("test_chunks").config.params
         assert set(params.vectors) == {DENSE_VECTOR}
-        assert set(params.sparse_vectors) == {SPARSE_VECTOR}
+        assert set(params.sparse_vectors) == {SPARSE_VECTOR_DE, SPARSE_VECTOR_EN}
+
+    def test_every_sparse_field_applies_idf(self):
+        # IDF is per field — Qdrant keeps document-frequency stats separately
+        w = self.make()
+        w.ensure_collection(dense_size=2)
+        sparse = w._client.get_collection("test_chunks").config.params.sparse_vectors
+        assert all(
+            sparse[name].modifier == models.Modifier.IDF for name in SPARSE_VECTORS
+        )
 
 
 class TestLedgerRow:
@@ -201,3 +226,43 @@ class TestBm25Embedder:
 
         # model=None and no fastembed call: empty input must short-circuit
         assert Bm25Embedder("Qdrant/bm25", "german").embed([]) == []
+
+
+class TestBm25Embedders:
+    """The per-field container: one analyzer per sparse vector name."""
+
+    def fake(self, index):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            embed=lambda texts, batch_size=None: [
+                SimpleNamespace(indices=[index], values=[1.0]) for _ in texts
+            ]
+        )
+
+    def make(self):
+        from rag_embed.sparse import Bm25Embedder, Bm25Embedders
+
+        return Bm25Embedders(
+            {
+                name: Bm25Embedder("Qdrant/bm25", lang, model=self.fake(i))
+                for i, (name, lang) in enumerate(SPARSE_VECTORS.items())
+            }
+        )
+
+    def test_embeds_every_text_in_every_field(self):
+        out = self.make().embed(["a", "b"])
+        assert set(out) == set(SPARSE_VECTORS)
+        assert all(len(v) == 2 for v in out.values())
+
+    def test_fields_are_separate_spaces(self):
+        # each analyzer stems differently, so the same text lands on different ids
+        out = self.make().embed(["a"])
+        assert out[SPARSE_VECTOR_DE][0].indices != out[SPARSE_VECTOR_EN][0].indices
+
+    def test_for_fields_builds_one_embedder_per_language(self):
+        from rag_embed.sparse import Bm25Embedders
+
+        e = Bm25Embedders.for_fields(SPARSE_VECTORS, "Qdrant/bm25")
+        # models stay unloaded (lazy), so this asserts wiring only — offline
+        assert {n: emb.language for n, emb in e._embedders.items()} == SPARSE_VECTORS

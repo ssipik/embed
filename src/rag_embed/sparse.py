@@ -1,21 +1,27 @@
-"""In-process BM25 sparse embedder (fastembed) for the sparse leg of hybrid retrieval.
+"""In-process BM25 sparse embedders (fastembed) for the sparse leg of hybrid retrieval.
 
-BM25 is non-neural: tokenize → German stem → drop stopwords → hash to token ids →
-term frequencies (length-normalized against avg_len). No IDF here — Qdrant applies IDF
+BM25 is non-neural: tokenize → stem → drop stopwords → hash to token ids → term
+frequencies (length-normalized against avg_len). No IDF here — Qdrant applies IDF
 at query time from the collection's document-frequency stats (the sparse field's
 Modifier.IDF). Runs on CPU in ~microseconds per chunk, so unlike dense (TEI) there is
 no server; fastembed pulls onnxruntime as a dependency but BM25 runs no ONNX model.
 
+Stemmer and stopwords are language-specific, and the stemmer defines the token ids, so
+one analyzer means one vector space. Every chunk is embedded once per analyzer
+(`Bm25Embedders`, one field each per qdrant.SPARSE_VECTORS) — a German analyzer alone
+leaves English morphology unstemmed (`banking` never reaches `bank`).
+
 Cross-stage contract: the retrieval stage must embed queries with the same model id +
-language, and both stages must pin the same fastembed version — its stemmer and token
-hash define the sparse id space, so a drift silently breaks ingest/query matching.
+language per field, and both stages must pin the same fastembed version — its stemmer
+and token hash define the sparse id space, so a drift silently breaks ingest/query
+matching.
 """
 
 from __future__ import annotations
 
 from qdrant_client import models
 
-__all__ = ["Bm25Embedder"]
+__all__ = ["Bm25Embedder", "Bm25Embedders"]
 
 
 class Bm25Embedder:
@@ -55,13 +61,52 @@ class Bm25Embedder:
         if not texts:
             return []
         model = self._get_model()
-        return [
+        vectors = [
             models.SparseVector(
                 indices=[int(i) for i in e.indices],
                 values=[float(v) for v in e.values],
             )
             for e in model.embed(texts, batch_size=self.batch_size)
         ]
+        return vectors
 
     def close(self) -> None:
         pass
+
+
+class Bm25Embedders:
+    """One Bm25Embedder per named sparse field — the whole batch, every analyzer.
+
+    Each field is its own vector space (the stemmer defines the token ids), so
+    the same text embedded twice yields two unrelated sets of ids that Qdrant
+    scores and IDF-weights independently.
+    """
+
+    def __init__(self, embedders: dict[str, Bm25Embedder]):
+        self._embedders = embedders
+
+    @classmethod
+    def for_fields(
+        cls,
+        fields: dict[str, str],
+        model_id: str,
+        avg_len: float = 256.0,
+        batch_size: int = 32,
+    ) -> Bm25Embedders:
+        """Build from a {sparse vector name: analyzer language} mapping
+        (qdrant.SPARSE_VECTORS)."""
+        return cls(
+            {
+                name: Bm25Embedder(model_id, language, avg_len, batch_size)
+                for name, language in fields.items()
+            }
+        )
+
+    def embed(self, texts: list[str]) -> dict[str, list[models.SparseVector]]:
+        """{sparse vector name: one vector per text}, order-preserving."""
+        vectors_lang = {name: e.embed(texts) for name, e in self._embedders.items()}
+        return vectors_lang
+
+    def close(self) -> None:
+        for e in self._embedders.values():
+            e.close()

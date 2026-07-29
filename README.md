@@ -20,7 +20,7 @@ python -m rag_embed --batch-id <id>
 docker compose run --rm --build pipeline python -m rag_embed --batch-id <id>
 ```
 
-Config env vars: `RAG_TEI_URL` (default `http://localhost:8080`), `RAG_QDRANT_URL` (default `http://localhost:6333`), `RAG_QDRANT_COLLECTION` (`rag_chunks`), `RAG_EMBED_BATCH_SIZE` (32), `RAG_SPARSE_MODEL_ID` (`Qdrant/bm25`), `RAG_SPARSE_LANGUAGE` (`german`), `RAG_SPARSE_AVG_LEN` (256), `RAG_PG_DSN`.
+Config env vars: `RAG_TEI_URL` (default `http://localhost:8080`), `RAG_QDRANT_URL` (default `http://localhost:6333`), `RAG_QDRANT_COLLECTION` (`rag_chunks`), `RAG_EMBED_BATCH_SIZE` (32), `RAG_SPARSE_MODEL_ID` (`Qdrant/bm25`), `RAG_SPARSE_AVG_LEN` (256), `RAG_PG_DSN`. The BM25 analyzer languages are not env-configurable — they name the collection's sparse fields, so they live in `qdrant.SPARSE_VECTORS`.
 
 ## Design notes
 

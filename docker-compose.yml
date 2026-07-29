@@ -3,8 +3,8 @@
 services:
   pipeline:
     build: .
-    # command: python -m rag_embed --batch 2
-    command: tail -f /dev/null
+    command: python -m rag_embed --batch-id 21
+    # command: tail -f /dev/null
     volumes:
       # live-mount code + config over the image copies (edit without rebuild)
       - ./src:/app
@@ -15,3 +15,9 @@ services:
       RAG_PG_DSN: postgresql+psycopg://rag:rag@host.docker.internal:5433/rag_ingestion
       RAG_TEI_URL: http://host.docker.internal:8080
       RAG_QDRANT_URL: http://host.docker.internal:6333
+      # CPU inference is ~3-5 s per ~1000-token chunk and scales linearly, so a
+      # request costs batch_size x that. 8 matches the max_batch_requests TEI
+      # forces for bge-m3 (bigger requests buy no throughput, only longer ones),
+      # and the timeout covers a worst-case full batch plus queueing.
+      RAG_EMBED_BATCH_SIZE: "8"
+      RAG_HTTP_TIMEOUT: "180"

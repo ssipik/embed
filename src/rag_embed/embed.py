@@ -15,9 +15,9 @@ from rag_embed.db import (
     ingest_manifest,
     staged_nodes,
 )
-from rag_embed.qdrant import DENSE_VECTOR, SPARSE_VECTOR, QdrantWriter, point_id
+from rag_embed.qdrant import DENSE_VECTOR, SPARSE_VECTORS, QdrantWriter, point_id
 from rag_embed.settings import get_settings
-from rag_embed.sparse import Bm25Embedder
+from rag_embed.sparse import Bm25Embedders
 from rag_embed.tei import TeiClient
 
 logger = logging.getLogger(__name__)
@@ -36,24 +36,33 @@ class EmbedBatchReport:
 def build_points(
     nodes: list[dict],
     dense_vectors: list[list[float]],
-    sparse_vectors: list[models.SparseVector],
+    sparse_vectors: dict[str, list[models.SparseVector]],
 ) -> list[models.PointStruct]:
     """Staged nodes + their dense and sparse vectors → Qdrant points.
 
-    Each point carries named vectors (dense from TEI, sparse from BM25) for
-    hybrid retrieval. Point id is deterministic (manifest_id and node_seq) —
-    re-runs of the same sighting overwrite, never duplicate. Payload = chunk
-    text + the chunk metadata; the chunk text lives here permanently, since
-    Postgres staging is deleted by finalize.
+    sparse_vectors is {sparse vector name: one vector per node} — one entry per
+    BM25 analyzer (qdrant.SPARSE_VECTORS). Each point carries all of them as
+    named vectors alongside the dense one, for hybrid retrieval. Point id is
+    deterministic (manifest_id and node_seq) — re-runs of the same sighting
+    overwrite, never duplicate. Payload = chunk text + the chunk metadata; the
+    chunk text lives here permanently, since Postgres staging is deleted by
+    finalize.
     """
-    return [
+    # one column per sparse field; strict zip keeps a short column loud rather
+    # than silently truncating to the shortest
+    columns = list(sparse_vectors.values())
+    points = [
         models.PointStruct(
             id=point_id(n["manifest_id"], n["node_seq"]),
-            vector={DENSE_VECTOR: dvec, SPARSE_VECTOR: svec},
+            vector={
+                DENSE_VECTOR: dvec,
+                **dict(zip(sparse_vectors, svecs, strict=True)),
+            },
             payload={"text": n["text"], "node_seq": n["node_seq"], **n["metadata"]},
         )
-        for n, dvec, svec in zip(nodes, dense_vectors, sparse_vectors, strict=True)
+        for n, dvec, *svecs in zip(nodes, dense_vectors, *columns, strict=True)
     ]
+    return points
 
 
 def ledger_row(doc: dict) -> dict:
@@ -93,7 +102,7 @@ def run_embed_batch(
     batch_id: int,
     engine: Engine | None = None,
     embedder: TeiClient | None = None,
-    sparse_embedder: Bm25Embedder | None = None,
+    sparse_embedder: Bm25Embedders | None = None,
     writer: QdrantWriter | None = None,
 ) -> EmbedBatchReport:
     """The embed stage for one parsed batch (the mapped Airflow task).
@@ -113,9 +122,9 @@ def run_embed_batch(
         settings.tei_url, settings.http_timeout, settings.embed_batch_size
     )
     own_sparse = sparse_embedder is None
-    sparse_embedder = sparse_embedder or Bm25Embedder(
+    sparse_embedder = sparse_embedder or Bm25Embedders.for_fields(
+        SPARSE_VECTORS,
         settings.sparse_model_id,
-        settings.sparse_language,
         settings.sparse_avg_len,
         settings.embed_batch_size,
     )
@@ -185,39 +194,36 @@ def run_embed_batch(
     report = EmbedBatchReport(batch_id=batch_id)
     try:
         for doc in batch_docs:
+            logger.info("computing embeddings for doc: %s ----------------", doc['manifest_id'])
             manifest_id = doc["manifest_id"]
-            # the sighting whose points are live now — None on first ingestion
+            # The sighting whose points are live now — None on first ingestion
             ledger_doc_id = ledger_docs_ids.get(manifest_id)
             if doc["status"] == "staged":
                 doc_nodes = nodes_by_doc.get(manifest_id, [])
                 texts = [n["text"] for n in doc_nodes]
+                # Compute dense (fixed dimension) and sparse (dimensionless) vectors
                 dense = embedder.embed(texts)
                 sparse = sparse_embedder.embed(texts)
                 points = build_points(doc_nodes, dense, sparse)
+                # Update Qdrant entry
                 if points:
-                    # dense has a fixed size (sparse is dimensionless); derive it
-                    # from the embedding, not len(points[0].vector) — now a dict
                     writer.ensure_collection(dense_size=len(dense[0]))
-                # delete on the OLD id, insert under the new one: deleting on
-                # the new id would be a no-op and orphan the old chunks
                 writer.replace_doc_points(ledger_doc_id, points)
                 report.counts["docs_embedded"] += 1
                 report.counts["points"] += len(points)
             elif doc["status"] == "skipped_unchanged":
-                # text unchanged, so the vectors stay — but the ledger still
-                # advances to this sighting, and its points' payload with it
+                # Vectors are unchanged; the document has a new manifest_id
                 if ledger_doc_id is not None and ledger_doc_id != manifest_id:
                     writer.repoint_doc_points(ledger_doc_id, manifest_id)
                 report.counts["docs_marked_only"] += 1
             else:
                 continue  # pending/error (parse problems) or already embedded
 
+            # Update ledger entry
             _write_ledger(engine, ledger_doc_id, ledger_row(doc))
+            # Update status of processing batch doc
             if doc["status"] == "staged":
                 with engine.begin() as conn:
-                    # Both PK columns: a doc has one row per batch it was
-                    # planned into, and only this batch's row may move
-                    # (see 003_plan.sql).
                     conn.execute(
                         update(ingest_batch_docs)
                         .where(
