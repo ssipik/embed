@@ -17,6 +17,8 @@ Scope note:
 Two of the requested checks were inverted/relaxed because they contradict the
 stage design (see the CORRECTED notes printed at runtime):
 - skipped_unchanged docs DO land in ingest_docs (ledger write is by design).
+- skipped_empty docs (no text) land in ingest_docs with status 'empty' and have
+  no points, so the active-only checks 5-6 correctly leave them out.
 - ingest_docs is one row per document; Qdrant is one point per chunk, so the
   counts are compared as distinct-manifest_ids, not raw point count.
 """
@@ -34,7 +36,7 @@ from rag_embed.qdrant import NODE_SEQ_BITS
 from rag_embed.settings import get_settings
 
 # statuses a batch doc can hold after a clean embed run
-DONE_STATUSES = {"embedded", "skipped_unchanged"}
+DONE_STATUSES = {"embedded", "skipped_unchanged", "skipped_empty"}
 
 
 class Report:
@@ -143,6 +145,10 @@ def main() -> int:
         skipped_ids = {
             r["manifest_id"] for r in batch_rows if r["status"] == "skipped_unchanged"
         }
+        # docs that parsed to no text: a ledger row (status 'empty'), no points
+        empty_ids = {
+            r["manifest_id"] for r in batch_rows if r["status"] == "skipped_empty"
+        }
         other = {
             r["manifest_id"]: r["status"]
             for r in batch_rows
@@ -175,7 +181,7 @@ def main() -> int:
 
     # 1. every batch doc reached a terminal embed status
     rep.check(
-        "1. all batch docs are 'embedded' or 'skipped_unchanged'",
+        "1. all batch docs are 'embedded', 'skipped_unchanged' or 'skipped_empty'",
         not other,
         "" if not other
         else f"{len(other)} not terminal: "
@@ -205,11 +211,12 @@ def main() -> int:
     )
 
     # 4. batch-scoped ledger count == terminal batch docs
-    expected = len(embedded_ids) + len(skipped_ids)
+    expected = len(embedded_ids) + len(skipped_ids) + len(empty_ids)
     rep.check(
-        "4. ingest_docs rows for this batch == embedded+skipped batch docs",
+        "4. ingest_docs rows for this batch == embedded+skipped+empty batch docs",
         len(ledger_batch_ids) == expected,
-        f"ledger(batch)={len(ledger_batch_ids)} vs embedded+skipped={expected}",
+        f"ledger(batch)={len(ledger_batch_ids)} vs "
+        f"embedded+skipped+empty={expected} (empty={len(empty_ids)})",
     )
     rep.info("    global ingest_docs row count", str(global_ledger_count))
 

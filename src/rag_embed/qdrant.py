@@ -22,6 +22,7 @@ __all__ = [
     "SPARSE_VECTOR_DE",
     "SPARSE_VECTOR_EN",
     "SPARSE_VECTORS",
+    "PAYLOAD_INDEXES",
 ]
 
 # chunk slots per sighting: 2**20 = 1,048,576
@@ -41,6 +42,24 @@ SPARSE_VECTOR_EN = "sparse_bm25_en"
 SPARSE_VECTORS: dict[str, str] = {
     SPARSE_VECTOR_DE: "german",
     SPARSE_VECTOR_EN: "english",
+}
+
+# Payload fields that carry an index, and its type. Unindexed payload still
+# filters, but by full scan — these are the fields something filters on hot:
+#  - manifest_id: this stage's delete-by-doc filter
+#  - source_url: the retrieval stage's fetch_document, keyed on document
+#    identity rather than the mutable manifest_id
+#  - the rest: the agent's search filters (block 8)
+# language is deliberately absent — it is the source's configured constant, not
+# detected, so it is not offered as a filter (../masterplan/ARCHITECTURE.md
+# block 7).
+PAYLOAD_INDEXES: dict[str, models.PayloadSchemaType] = {
+    "manifest_id": models.PayloadSchemaType.INTEGER,
+    "source_system": models.PayloadSchemaType.KEYWORD,
+    "source_id": models.PayloadSchemaType.KEYWORD,
+    "doc_type": models.PayloadSchemaType.KEYWORD,
+    "source_url": models.PayloadSchemaType.KEYWORD,
+    "published_at": models.PayloadSchemaType.DATETIME,
 }
 
 
@@ -71,8 +90,9 @@ class QdrantWriter:
         self._client = client or QdrantClient(url=url)
 
     def ensure_collection(self, dense_size: int) -> None:
-        """Create the collection (+ the payload index deletion filtering
-        needs) on first contact; later calls are no-ops.
+        """Create the collection (+ PAYLOAD_INDEXES) on first contact; later
+        calls are no-ops — so adding an index here only reaches an existing
+        collection after it is dropped and re-ingested.
 
         Named vectors: dense (BGE-M3 via TEI, cosine) + one sparse field per
         BM25 analyzer (SPARSE_VECTORS). Sparse fields have no size — they are
@@ -93,9 +113,8 @@ class QdrantWriter:
                 for name in SPARSE_VECTORS
             },
         )
-        self._client.create_payload_index(
-            self.collection, "manifest_id", models.PayloadSchemaType.INTEGER
-        )
+        for field, schema in PAYLOAD_INDEXES.items():
+            self._client.create_payload_index(self.collection, field, schema)
 
     def replace_doc_points(
         self,
@@ -113,6 +132,10 @@ class QdrantWriter:
             self._client.upsert(self.collection, points=points, wait=True)
 
     def delete_doc_points(self, manifest_id: int) -> None:
+        # a batch of only empty docs never calls ensure_collection, so there
+        # may be no collection yet — and then nothing to delete
+        if not self._client.collection_exists(self.collection):
+            return
         self._client.delete(
             self.collection,
             points_selector=models.FilterSelector(filter=doc_filter(manifest_id)),

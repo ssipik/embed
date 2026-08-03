@@ -28,7 +28,7 @@ class EmbedBatchReport:
     batch_id: int
     counts: dict[str, int] = field(
         default_factory=lambda: {
-            "docs_embedded": 0, "docs_marked_only": 0, "points": 0
+            "docs_embedded": 0, "docs_marked_only": 0, "docs_empty": 0, "points": 0
         }
     )
 
@@ -65,18 +65,21 @@ def build_points(
     return points
 
 
-def ledger_row(doc: dict) -> dict:
-    """The ingest_docs values for one successfully ingested doc.
+def ledger_row(doc: dict, status: str = "active") -> dict:
+    """The ingest_docs values for one ingested doc.
 
     manifest_id is this batch's sighting — the one whose chunks are now in
     Qdrant. Everything else about the document (url, title, doc_version) is
     read through that sighting, so the ledger stores only state.
+
+    status is 'active', or 'empty' for a document that parsed to no text and
+    therefore has no vectors at all.
     """
     return {
         "manifest_id": doc["manifest_id"],
         "text_sha": doc.get("text_sha"),
         "parser_version": doc.get("parser_version"),
-        "status": "active",
+        "status": status,
     }
 
 
@@ -107,10 +110,15 @@ def run_embed_batch(
 ) -> EmbedBatchReport:
     """The embed stage for one parsed batch (the mapped Airflow task).
 
-    'staged' docs: embed their staged nodes via TEI, replace the doc's
-    points in Qdrant, mark the ledger. 'skipped_unchanged' docs: mark the
-    ledger only — their vectors are current, but the fresh sighting's
-    change signals must land or delta re-triggers 'changed' forever.
+    Per batch-doc status:
+    - 'staged': embed the staged nodes via TEI, replace the doc's points in
+      Qdrant, mark the ledger 'active'.
+    - 'skipped_unchanged': mark the ledger only — the vectors are current, but
+      the fresh sighting's change signals must land or delta re-triggers
+      'changed' forever.
+    - 'skipped_empty': the document has no text — delete its points and mark
+      the ledger 'empty'.
+
     Infra failures (TEI/Qdrant down) propagate and fail the batch task —
     only parse-stage problems are per-doc. Ends by setting the batch to
     'done' and returns counts only (the stage contract).
@@ -211,16 +219,26 @@ def run_embed_batch(
                 writer.replace_doc_points(ledger_doc_id, points)
                 report.counts["docs_embedded"] += 1
                 report.counts["points"] += len(points)
+                ledger_status = "active"
             elif doc["status"] == "skipped_unchanged":
                 # Vectors are unchanged; the document has a new manifest_id
                 if ledger_doc_id is not None and ledger_doc_id != manifest_id:
                     writer.repoint_doc_points(ledger_doc_id, manifest_id)
                 report.counts["docs_marked_only"] += 1
+                ledger_status = "active"
+            elif doc["status"] == "skipped_empty":
+                # No text, so no vectors: drop whatever a non-empty earlier
+                # version left behind. The ledger row still has to advance to
+                # this sighting, or delta re-triggers the document forever.
+                if ledger_doc_id is not None:
+                    writer.delete_doc_points(ledger_doc_id)
+                report.counts["docs_empty"] += 1
+                ledger_status = "empty"
             else:
                 continue  # pending/error (parse problems) or already embedded
 
             # Update ledger entry
-            _write_ledger(engine, ledger_doc_id, ledger_row(doc))
+            _write_ledger(engine, ledger_doc_id, ledger_row(doc, ledger_status))
             # Update status of processing batch doc
             if doc["status"] == "staged":
                 with engine.begin() as conn:
