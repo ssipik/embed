@@ -6,12 +6,12 @@
     "configurations": [
 
         {
-            "name": "Python Debugger: Module",
+            "name": "rag_embed",
             "type": "debugpy",
             "request": "launch",
             "module": "rag_embed",
             "args": [
-                "--batch-id", "21",
+                "--batch-id", "30",
             ],
         }
     ]
