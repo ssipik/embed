@@ -6,6 +6,7 @@ from rag_embed.embed import build_points, ledger_row
 from rag_embed.qdrant import (
     DENSE_VECTOR,
     NODE_SEQ_BITS,
+    PAYLOAD_INDEXES,
     SPARSE_VECTOR_DE,
     SPARSE_VECTOR_EN,
     SPARSE_VECTORS,
@@ -166,6 +167,25 @@ class TestQdrantWriter:
         w.ensure_collection(2)
         w.ensure_collection(2)
 
+    def test_indexed_payload_fields(self):
+        # the retrieval stage filters on these; an unindexed field still filters
+        # but by full scan. language is absent on purpose — it is the source's
+        # configured constant, not detected, so it is not offered as a filter.
+        assert set(PAYLOAD_INDEXES) == {
+            "manifest_id",
+            "source_system",
+            "source_id",
+            "doc_type",
+            "source_url",
+            "published_at",
+        }
+        assert PAYLOAD_INDEXES["published_at"] is models.PayloadSchemaType.DATETIME
+
+    def test_delete_without_a_collection_is_noop(self):
+        # a batch of only skipped_empty docs never calls ensure_collection
+        w = self.make()
+        w.delete_doc_points(1)
+
     def test_collection_has_named_dense_and_both_sparse(self):
         w = self.make()
         w.ensure_collection(dense_size=2)
@@ -200,6 +220,12 @@ class TestLedgerRow:
             "parser_version",
             "status",
         }
+
+    def test_empty_status_passes_through(self):
+        # a skipped_empty doc gets a ledger row with no vectors behind it
+        row = ledger_row(self.DOC, "empty")
+        assert row["status"] == "empty"
+        assert row["manifest_id"] == 7
 
 
 class TestBm25Embedder:

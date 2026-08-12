@@ -25,6 +25,7 @@ DEFAULT_SPARSE_AVG_LEN = 256.0
 class Settings:
     pg_dsn: str
     http_timeout: float
+    tei_timeout: float
     user_agent: str
     tei_url: str
     qdrant_url: str
@@ -38,6 +39,12 @@ def get_settings() -> Settings:
     return Settings(
         pg_dsn=os.environ.get("RAG_PG_DSN", DEFAULT_PG_DSN),
         http_timeout=float(os.environ.get("RAG_HTTP_TIMEOUT", "30")),
+        # Its own knob because one /embed call carries embed_batch_size chunks
+        # and TEI on CPU runs them 8 at a time: measured 13-16 s for a batch of
+        # long chunks, so the 30 s general timeout aborts a request TEI is still
+        # working on. Raising RAG_HTTP_TIMEOUT instead would slow down every
+        # other call's failure detection.
+        tei_timeout=float(os.environ.get("RAG_TEI_TIMEOUT", "300")),
         user_agent=os.environ.get("RAG_HTTP_USER_AGENT", DEFAULT_USER_AGENT),
         tei_url=os.environ.get("RAG_TEI_URL", DEFAULT_TEI_URL),
         qdrant_url=os.environ.get("RAG_QDRANT_URL", DEFAULT_QDRANT_URL),

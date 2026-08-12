@@ -127,7 +127,7 @@ def run_embed_batch(
     engine = engine or get_engine()
     own_embedder = embedder is None
     embedder = embedder or TeiClient(
-        settings.tei_url, settings.http_timeout, settings.embed_batch_size
+        settings.tei_url, settings.tei_timeout, settings.embed_batch_size
     )
     own_sparse = sparse_embedder is None
     sparse_embedder = sparse_embedder or Bm25Embedders.for_fields(
