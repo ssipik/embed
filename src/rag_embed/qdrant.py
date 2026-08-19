@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from qdrant_client import QdrantClient, models
 
+from rag_config import load_params
+
 __all__ = [
     "QdrantWriter",
     "point_id",
@@ -28,21 +30,15 @@ __all__ = [
 # chunk slots per sighting: 2**20 = 1,048,576
 NODE_SEQ_BITS = 20
 
-# Named-vector ids — model-specific so a second model can be added without
-# ambiguity (e.g. dense_e5, sparse_splade). Cross-stage contract: the retrieval
-# stage must query these exact names.
-DENSE_VECTOR = "dense_bge_m3"
-SPARSE_VECTOR_DE = "sparse_bm25_de"
-SPARSE_VECTOR_EN = "sparse_bm25_en"
-
-# Sparse field → BM25 analyzer language. Every chunk gets both, whatever language
-# it is in: the analyzer defines the sparse id space, so picking one per document
-# would make matching depend on an ingest-time language guess. Each field keeps its
-# own document-frequency stats, hence its own IDF.
-SPARSE_VECTORS: dict[str, str] = {
-    SPARSE_VECTOR_DE: "german",
-    SPARSE_VECTOR_EN: "english",
-}
+# Named-vector ids and their BM25 analyzers, from rag-config's parameters.yaml —
+# this stage writes them, the retrieval stage queries them, and they used to be
+# two copies of the same constants that nothing checked. The reasoning behind
+# each lives in rag_config.params.EmbedParams.
+_vectors = load_params().embed
+DENSE_VECTOR = _vectors.dense_vector
+SPARSE_VECTORS: dict[str, str] = dict(_vectors.sparse_vectors)
+SPARSE_VECTOR_DE = _vectors.sparse_vector_for("german")
+SPARSE_VECTOR_EN = _vectors.sparse_vector_for("english")
 
 # Payload fields that carry an index, and its type. Unindexed payload still
 # filters, but by full scan — these are the fields something filters on hot:

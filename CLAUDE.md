@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Stage 5 (EMBED) of the six-stage ingestion skeleton — `../ARCHITECTURE.md` blocks 5 (TEI), 6 (Qdrant/ledger) and 11 are authoritative. Standalone stage module: `settings.py`, `sources.py`, `db.py` are **deliberately duplicated** from the other stage packages — fix infra bugs in every copy.
+Stage 5 (EMBED) of the six-stage ingestion skeleton — `../ARCHITECTURE.md` blocks 5 (TEI), 6 (Qdrant/ledger) and 11 are authoritative. Standalone stage module: `settings.py` and `db.py` are **deliberately duplicated** from the other stage packages — fix infra bugs in every copy. Configuration is **not** duplicated: `sources.yaml` and `parameters.yaml` come from the shared `rag-config` package (`../config`) — edit them there, once. The Qdrant vector names and BM25 settings in `qdrant.py` now come from there too, because the agent must query exactly what this stage wrote.
 
 ## Commands
 
