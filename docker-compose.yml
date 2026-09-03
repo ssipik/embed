@@ -2,7 +2,10 @@
 # Needs ../postgres, ../qdrant and ../tei up (all publish on the host).
 services:
   pipeline:
-    build: .
+    build:
+      context: .
+      secrets:
+        - git_token
     command: python -m rag_embed --batch-id 21
     # command: tail -f /dev/null
     volumes:
@@ -21,3 +24,9 @@ services:
       # and the timeout covers a worst-case full batch plus queueing.
       RAG_EMBED_BATCH_SIZE: "8"
       RAG_HTTP_TIMEOUT: "180"
+
+# Build-time only: the private rag-config repo is cloned by `uv sync` in the
+# Dockerfile. BuildKit mounts this for that one RUN, so no layer holds it.
+secrets:
+  git_token:
+    environment: BITBUCKET_API_TOKEN
