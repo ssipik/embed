@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from qdrant_client import QdrantClient, models
 
-from rag_config import load_params
+from rag_config import load_settings, sparse_legs
 
 __all__ = [
     "QdrantWriter",
@@ -24,21 +24,29 @@ __all__ = [
     "SPARSE_VECTOR_DE",
     "SPARSE_VECTOR_EN",
     "SPARSE_VECTORS",
+    "SPARSE_LEGS",
     "PAYLOAD_INDEXES",
+    "doc_filter",
+    "docs_filter",
 ]
 
 # chunk slots per sighting: 2**20 = 1,048,576
 NODE_SEQ_BITS = 20
 
-# Named-vector ids and their BM25 analyzers, from rag-config's parameters.yaml —
-# this stage writes them, the retrieval stage queries them, and they used to be
-# two copies of the same constants that nothing checked. The reasoning behind
-# each lives in rag_config.params.EmbedParams.
-_vectors = load_params().embed
-DENSE_VECTOR = _vectors.dense_vector
-SPARSE_VECTORS: dict[str, str] = dict(_vectors.sparse_vectors)
-SPARSE_VECTOR_DE = _vectors.sparse_vector_for("german")
-SPARSE_VECTOR_EN = _vectors.sparse_vector_for("english")
+# Named-vector ids from rag-config's settings.yaml, and the model embedding each
+# leg from its parameters.yaml — this stage writes them, the retrieval stage
+# queries them, and they used to be two copies of the same constants that
+# nothing checked. sparse_legs() joins the two halves and refuses to run if they
+# disagree; the reasoning behind each lives in rag_config.params.
+_settings = load_settings()
+SPARSE_LEGS = sparse_legs(settings=_settings)
+DENSE_VECTOR = _settings.dense_vector
+# {Qdrant field: its BM25 analyzer} — the shape the collection is built from.
+SPARSE_VECTORS: dict[str, str] = {
+    leg.vector: language for language, leg in SPARSE_LEGS.items()
+}
+SPARSE_VECTOR_DE = SPARSE_LEGS["german"].vector
+SPARSE_VECTOR_EN = SPARSE_LEGS["english"].vector
 
 # Payload fields that carry an index, and its type. Unindexed payload still
 # filters, but by full scan — these are the fields something filters on hot:
@@ -75,6 +83,17 @@ def doc_filter(manifest_id: int) -> models.Filter:
         must=[
             models.FieldCondition(
                 key="manifest_id", match=models.MatchValue(value=manifest_id)
+            )
+        ]
+    )
+
+
+def docs_filter(manifest_ids: list[int]) -> models.Filter:
+    """Points of any of these sightings — one delete for a whole group."""
+    return models.Filter(
+        must=[
+            models.FieldCondition(
+                key="manifest_id", match=models.MatchAny(any=list(manifest_ids))
             )
         ]
     )
@@ -122,19 +141,32 @@ class QdrantWriter:
         previous_manifest_id is the ledger's — None for a first ingestion,
         where there is nothing to delete.
         """
-        if previous_manifest_id is not None:
-            self.delete_doc_points(previous_manifest_id)
+        previous = [] if previous_manifest_id is None else [previous_manifest_id]
+        self.replace_docs_points(previous, points)
+
+    def replace_docs_points(
+        self, previous_manifest_ids: list[int], points: list[models.PointStruct]
+    ) -> None:
+        """replace_doc_points for a group of documents: one delete, one upsert.
+
+        previous_manifest_ids are the ledger's live sightings of the group's
+        documents (first ingestions have none).
+        """
+        self.delete_docs_points(previous_manifest_ids)
         if points:
             self._client.upsert(self.collection, points=points, wait=True)
 
     def delete_doc_points(self, manifest_id: int) -> None:
-        # a batch of only empty docs never calls ensure_collection, so there
+        self.delete_docs_points([manifest_id])
+
+    def delete_docs_points(self, manifest_ids: list[int]) -> None:
+        # a group of only empty docs never calls ensure_collection, so there
         # may be no collection yet — and then nothing to delete
-        if not self._client.collection_exists(self.collection):
+        if not manifest_ids or not self._client.collection_exists(self.collection):
             return
         self._client.delete(
             self.collection,
-            points_selector=models.FilterSelector(filter=doc_filter(manifest_id)),
+            points_selector=models.FilterSelector(filter=docs_filter(manifest_ids)),
             wait=True,
         )
 

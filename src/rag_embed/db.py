@@ -103,8 +103,9 @@ staged_nodes = Table(
 )
 
 
-def get_engine(dsn: str | None = None) -> Engine:
-    return create_engine(dsn or get_settings().pg_dsn)
+def get_engine(dsn: str | None = None, pool_size: int = 5) -> Engine:
+    """pool_size: connections kept open; embed sizes it to its worker count."""
+    return create_engine(dsn or get_settings().pg_dsn, pool_size=pool_size)
 
 
 def upsert_rows(

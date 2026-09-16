@@ -1,6 +1,6 @@
 """Post-embed sanity check for one batch: Postgres ledger vs Qdrant.
 
-Run after `python -m rag_embed --batch-id <id>` against the same ../postgres
+Run after `python -m rag_embed --run-id <id>` (for one of the run's batches) against the same ../postgres
 and ../qdrant the stage wrote to.
 
     .venv/bin/python sanity_check.py --batch-id <id>

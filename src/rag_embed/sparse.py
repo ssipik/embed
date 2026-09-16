@@ -8,7 +8,7 @@ no server; fastembed pulls onnxruntime as a dependency but BM25 runs no ONNX mod
 
 Stemmer and stopwords are language-specific, and the stemmer defines the token ids, so
 one analyzer means one vector space. Every chunk is embedded once per analyzer
-(`Bm25Embedders`, one field each per qdrant.SPARSE_VECTORS) — a German analyzer alone
+(`Bm25Embedders`, one field each per qdrant.SPARSE_LEGS) — a German analyzer alone
 leaves English morphology unstemmed (`banking` never reaches `bank`).
 
 Cross-stage contract: the retrieval stage must embed queries with the same model id +
@@ -20,6 +20,8 @@ matching.
 from __future__ import annotations
 
 from qdrant_client import models
+
+from rag_config import SparseLeg
 
 __all__ = ["Bm25Embedder", "Bm25Embedders"]
 
@@ -86,19 +88,21 @@ class Bm25Embedders:
         self._embedders = embedders
 
     @classmethod
-    def for_fields(
+    def for_legs(
         cls,
-        fields: dict[str, str],
-        model_id: str,
+        legs: dict[str, SparseLeg],
         avg_len: float = 256.0,
         batch_size: int = 32,
     ) -> Bm25Embedders:
-        """Build from a {sparse vector name: analyzer language} mapping
-        (qdrant.SPARSE_VECTORS)."""
+        """Build from {analyzer language: SparseLeg} (qdrant.SPARSE_LEGS).
+
+        The model is per leg, so German can use a decompounding one while
+        English stays on `Qdrant/bm25` — see rag_config.params.EmbedParams.
+        """
         return cls(
             {
-                name: Bm25Embedder(model_id, language, avg_len, batch_size)
-                for name, language in fields.items()
+                leg.vector: Bm25Embedder(leg.model, language, avg_len, batch_size)
+                for language, leg in legs.items()
             }
         )
 

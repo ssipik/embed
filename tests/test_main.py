@@ -3,17 +3,12 @@ import pytest
 from rag_embed.__main__ import build_parser
 
 
-def test_batch_id_is_required():
+def test_run_id_is_required():
     with pytest.raises(SystemExit):
         build_parser().parse_args([])
 
 
-def test_batch_id_repeatable():
-    args = build_parser().parse_args(["--batch-id", "1", "--batch-id", "2"])
-    assert args.batch_ids == [1, 2]
-
-
-def test_batch_id_must_be_an_int():
-    # batch ids are bigint identities now, not "<run>-b<uuid>" strings
-    with pytest.raises(SystemExit):
-        build_parser().parse_args(["--batch-id", "r1-babc"])
+def test_run_id_is_passed_through():
+    # Airflow run ids carry ':' and '+', so no int or slug parsing
+    args = build_parser().parse_args(["--run-id", "manual__2026-09-15T10:00:00+00:00"])
+    assert args.run_id == "manual__2026-09-15T10:00:00+00:00"

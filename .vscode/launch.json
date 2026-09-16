@@ -11,7 +11,7 @@
             "request": "launch",
             "module": "rag_embed",
             "args": [
-                "--batch-id", "30",
+                "--run-id", "all-20260916T132607Z",
             ],
         }
     ]
