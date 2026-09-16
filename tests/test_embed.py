@@ -126,8 +126,9 @@ class TestTeiClient:
         assert len(calls) == 3
         assert sleeps == [1.0, 2.0]
 
-    def test_gateway_error_then_success_is_retried(self, caplog):
-        responses = iter([httpx.Response(502), httpx.Response(200, json=[[1.0]])])
+    @pytest.mark.parametrize("status", [404, 502])
+    def test_gateway_error_then_success_is_retried(self, status, caplog):
+        responses = iter([httpx.Response(status), httpx.Response(200, json=[[1.0]])])
         sleeps = []
         tei = self.make(lambda request: next(responses), sleeps=sleeps)
         assert tei.embed(["a"]) == [[1.0]]

@@ -23,8 +23,10 @@ logger = logging.getLogger(__name__)
 # Consul check interval (10 s) when its health check fails, so the total wait
 # (37 s) outlasts a few such intervals.
 RETRY_DELAYS = (2.0, 5.0, 10.0, 20.0)
-# Responses from traefik when it could not reach a TEI replica.
-RETRY_STATUSES = frozenset({502, 503, 504})
+# Responses from traefik when it could not reach a TEI replica:
+# - 404: no healthy replica registered, so traefik has no route for the host
+# - 502/503/504: the chosen replica did not answer
+RETRY_STATUSES = frozenset({404, 502, 503, 504})
 # The connection failed or closed before a response; not timeouts, which already waited tei_timeout.
 RETRY_ERRORS = (httpx.ConnectError, httpx.RemoteProtocolError)
 
@@ -48,7 +50,7 @@ class TeiClient:
     def embed(self, texts: list[str]) -> list[list[float]]:
         """Embed texts in service-friendly sub-batches, preserving order.
 
-        - 502/503/504 or a dropped connection: the sub-batch is sent again after each of retry_delays
+        - 404/502/503/504 or a dropped connection: the sub-batch is sent again after each of retry_delays
         - any other error, or the last failed retry: propagates, so the run fails (infra failure)
         """
         vectors: list[list[float]] = []
