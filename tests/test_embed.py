@@ -89,10 +89,15 @@ class TestBuildPoints:
 
 
 class TestTeiClient:
-    def make(self, handler, batch_size=2):
+    def make(self, handler, batch_size=2, sleeps=None):
         transport = httpx.MockTransport(handler)
         return TeiClient(
-            "http://tei", 5, batch_size, client=httpx.Client(transport=transport)
+            "http://tei",
+            5,
+            batch_size,
+            client=httpx.Client(transport=transport),
+            retry_delays=(1.0, 2.0),
+            sleep=(sleeps if sleeps is not None else []).append,
         )
 
     def test_batches_preserve_order(self):
@@ -108,10 +113,51 @@ class TestTeiClient:
         assert calls == [2, 1]  # sub-batched
         assert vectors == [[1.0], [2.0], [3.0]]
 
-    def test_http_error_propagates(self):
-        tei = self.make(lambda request: httpx.Response(503))
+    def test_http_error_propagates_after_retries(self):
+        calls, sleeps = [], []
+
+        def handler(request):
+            calls.append(1)
+            return httpx.Response(503)
+
+        tei = self.make(handler, sleeps=sleeps)
         with pytest.raises(httpx.HTTPStatusError):
             tei.embed(["a"])
+        assert len(calls) == 3
+        assert sleeps == [1.0, 2.0]
+
+    def test_gateway_error_then_success_is_retried(self, caplog):
+        responses = iter([httpx.Response(502), httpx.Response(200, json=[[1.0]])])
+        sleeps = []
+        tei = self.make(lambda request: next(responses), sleeps=sleeps)
+        assert tei.embed(["a"]) == [[1.0]]
+        assert sleeps == [1.0]
+        assert "retrying in 1 s" in caplog.text
+
+    def test_dropped_connection_is_retried(self):
+        calls = []
+
+        def handler(request):
+            calls.append(1)
+            if len(calls) == 1:
+                raise httpx.ConnectError("refused", request=request)
+            return httpx.Response(200, json=[[1.0]])
+
+        assert self.make(handler).embed(["a"]) == [[1.0]]
+        assert len(calls) == 2
+
+    def test_client_error_is_not_retried(self):
+        calls, sleeps = [], []
+
+        def handler(request):
+            calls.append(1)
+            return httpx.Response(413)
+
+        tei = self.make(handler, sleeps=sleeps)
+        with pytest.raises(httpx.HTTPStatusError):
+            tei.embed(["a"])
+        assert len(calls) == 1
+        assert sleeps == []
 
 
 class TestQdrantWriter:
