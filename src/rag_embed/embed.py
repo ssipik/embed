@@ -188,7 +188,9 @@ def make_clients(settings: Settings) -> Clients:
         sparse=Bm25Embedders.for_legs(
             SPARSE_LEGS, settings.sparse_avg_len, settings.embed_batch_size
         ),
-        writer=QdrantWriter(settings.qdrant_url, settings.qdrant_collection),
+        writer=QdrantWriter(
+            settings.qdrant_url, settings.qdrant_collection, settings.http_timeout
+        ),
     )
 
 

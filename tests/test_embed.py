@@ -166,7 +166,7 @@ class TestQdrantWriter:
     semantics, no server."""
 
     def make(self):
-        return QdrantWriter("unused", "test_chunks", client=QdrantClient(":memory:"))
+        return QdrantWriter("unused", "test_chunks", 5, client=QdrantClient(":memory:"))
 
     def test_replace_is_idempotent_and_drops_stale_tail(self):
         w = self.make()
@@ -462,7 +462,7 @@ def tei_by_text_length(calls=None):
 
 class TestProcessGroup:
     def clients(self, calls=None):
-        writer = QdrantWriter("unused", "test_chunks", client=QdrantClient(":memory:"))
+        writer = QdrantWriter("unused", "test_chunks", 5, client=QdrantClient(":memory:"))
         return Clients(tei_by_text_length(calls), FakeSparse(), writer)
 
     def count(self, clients, mid=None):

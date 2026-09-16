@@ -100,9 +100,13 @@ def docs_filter(manifest_ids: list[int]) -> models.Filter:
 
 
 class QdrantWriter:
-    def __init__(self, url: str, collection: str, client: QdrantClient | None = None):
+    def __init__(
+        self, url: str, collection: str, timeout: float, client: QdrantClient | None = None
+    ):
         self.collection = collection
-        self._client = client or QdrantClient(url=url)
+        # without an explicit timeout qdrant-client uses httpx's 5 s, which a
+        # wait=true upsert can exceed while Qdrant is indexing in the background
+        self._client = client or QdrantClient(url=url, timeout=int(timeout))
 
     def ensure_collection(self, dense_size: int) -> None:
         """Create the collection (+ PAYLOAD_INDEXES) on first contact; later
