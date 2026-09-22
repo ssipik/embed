@@ -4,6 +4,7 @@ import logging
 import queue
 import threading
 from dataclasses import dataclass, field
+from math import ceil
 from typing import Callable
 
 from qdrant_client import models
@@ -166,6 +167,27 @@ def pack_groups(
     skipped = [doc for doc in docs if doc["status"] != "staged"]
     groups += [skipped[i : i + max_docs] for i in range(0, len(skipped), max_docs)]
     return groups
+
+
+def group_chunk_target(docs: list[dict], max_chunks: int, concurrency: int) -> int:
+    """Chunks per group, so that every worker gets one.
+
+    pack_groups otherwise fills each group to max_chunks (one full TEI
+    request), so a run holding fewer than max_chunks x concurrency chunks
+    produces fewer groups than workers and leaves the extra TEI replicas the
+    workers were sized to idle. The target only ever lowers the group size:
+    - a run with no staged docs, or a single worker: max_chunks, unchanged
+    - a run big enough to fill every worker: max_chunks, unchanged
+    - a smaller run: its chunks divided over the workers
+    """
+    if concurrency <= 1:
+        return max_chunks
+    total = sum(
+        doc.get("node_count") or max_chunks for doc in docs if doc["status"] == "staged"
+    )
+    if total <= 0:
+        return max_chunks
+    return max(1, min(max_chunks, ceil(total / concurrency)))
 
 
 @dataclass
@@ -408,7 +430,7 @@ def run_parallel(
         raise errors[0]
 
 
-def run_embed_run(
+def run_embed(
     run_id: str,
     engine: Engine | None = None,
     new_clients: Callable[[], Clients] | None = None,
@@ -430,11 +452,12 @@ def run_embed_run(
     new_clients = new_clients or (lambda: make_clients(settings))
 
     work = load_work(engine, run_id)
-    groups = pack_groups(work, settings.embed_batch_size)
+    chunks_per_group = group_chunk_target(work, settings.embed_batch_size, concurrency)
+    groups = pack_groups(work, chunks_per_group)
     report = EmbedRunReport(run_id=run_id, concurrency=concurrency, groups=len(groups))
     logger.info(
-        "embed %s: %d docs in %d groups; tei replicas=%s -> concurrency=%d",
-        run_id, len(work), len(groups), settings.tei_replicas, concurrency,
+        "embed %s: %d docs in %d groups of <=%d chunks; tei replicas=%s -> concurrency=%d",
+        run_id, len(work), len(groups), chunks_per_group, settings.tei_replicas, concurrency,
     )
 
     guard = CollectionGuard()

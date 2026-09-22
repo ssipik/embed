@@ -366,6 +366,7 @@ import time
 from rag_embed.embed import (
     Clients,
     CollectionGuard,
+    group_chunk_target,
     pack_groups,
     process_group,
     run_parallel,
@@ -438,6 +439,33 @@ class TestPackGroups:
         docs += [batch_doc(100 + i, status="skipped_empty") for i in range(7)]
         ids = [d["manifest_id"] for g in pack_groups(docs, 32) for d in g]
         assert sorted(ids) == sorted(d["manifest_id"] for d in docs)
+
+
+class TestGroupChunkTarget:
+    def test_a_small_run_is_spread_over_the_workers(self):
+        # 14 chunks, 8 workers: one full-size group would leave 7 workers idle
+        docs = [batch_doc(i, node_count=2) for i in range(7)]
+        assert group_chunk_target(docs, 32, 8) == 2
+        assert len(pack_groups(docs, group_chunk_target(docs, 32, 8))) == 7
+
+    def test_a_run_that_fills_every_worker_keeps_full_requests(self):
+        docs = [batch_doc(i, node_count=25) for i in range(80)]  # 2000 chunks
+        assert group_chunk_target(docs, 32, 8) == 32
+
+    def test_one_worker_keeps_full_requests(self):
+        docs = [batch_doc(i, node_count=2) for i in range(7)]
+        assert group_chunk_target(docs, 32, 1) == 32
+
+    def test_skipped_docs_hold_no_chunks(self):
+        docs = [batch_doc(i, status="skipped_unchanged", node_count=None) for i in range(20)]
+        assert group_chunk_target(docs, 32, 8) == 32
+
+    def test_no_work_keeps_full_requests(self):
+        assert group_chunk_target([], 32, 8) == 32
+
+    def test_an_unknown_chunk_count_counts_as_a_full_request(self):
+        docs = [batch_doc(i, node_count=None) for i in range(8)]  # 8 x 32 chunks
+        assert group_chunk_target(docs, 32, 8) == 32
 
 
 class FakeSparse:
@@ -636,7 +664,7 @@ class TestRunWithoutBatches:
     def test_run_reports_zero_counts(self, monkeypatch):
         import rag_embed.embed as embed
 
-        report = embed.run_embed_run(
+        report = embed.run_embed(
             "quiet-day",
             engine=self.EmptyEngine(),
             new_clients=lambda: pytest.fail("no worker should start"),

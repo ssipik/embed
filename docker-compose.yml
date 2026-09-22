@@ -1,22 +1,28 @@
-# One-off runs: docker compose run --rm pipeline python -m rag_embed --batch-id <id>
-# Needs ../postgres, ../qdrant and ../tei up (all publish on the host).
+# One-off runs: docker compose run --rm pipeline python -m rag_embed --run-id <id>
+# One container per run: embed embeds every batch of that run with its own
+# worker threads. Needs ../postgres and ../qdrant up, and a reachable TEI.
 services:
   pipeline:
     build:
       context: .
       secrets:
         - git_token
-    command: python -m rag_embed --batch-id 21
+    command: python -m rag_embed --run-id all-20260728T150308Z
     # command: tail -f /dev/null
     volumes:
       # live-mount code over the image copy (edit without rebuild); sources.yaml
       # and parameters.yaml come from the rag-config dependency, not from here
       - ./src:/app
       - ./.vscode:/app/.vscode
+      # the cluster's internal CA: TEI is reached over https and the image's
+      # certifi bundle does not carry it
+      - /etc/ssl/certs/ca-certificates.crt:/etc/ssl/certs/ca-certificates.crt:ro
     environment:
       # host.docker.internal = the host machine, where the services publish
       RAG_PG_DSN: postgresql+psycopg://rag:rag@host.docker.internal:5433/rag_ingestion
-      RAG_TEI_URL: http://host.docker.internal:8080
+      # TEI is the cluster job tei-embed, not a local container
+      RAG_TEI_URL: https://tei-embed.service.get
+      SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
       RAG_QDRANT_URL: http://host.docker.internal:6333
       # CPU inference is ~3-5 s per ~1000-token chunk and scales linearly, so a
       # request costs batch_size x that. 8 matches the max_batch_requests TEI

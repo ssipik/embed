@@ -1,6 +1,6 @@
 """Dev/ops entrypoint: ``python -m rag_embed``.
 
-Thin argparse wrapper over :func:`rag_embed.embed.run_embed_run`
+Thin argparse wrapper over :func:`rag_embed.embed.run_embed`
 — the library function remains the API that Airflow tasks import directly;
 keep all stage logic out of this module.
 """
@@ -13,7 +13,7 @@ import sys
 
 from dotenv import load_dotenv
 
-from rag_embed.embed import run_embed_run
+from rag_embed.embed import run_embed
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -36,7 +36,7 @@ def main(argv: list[str] | None = None) -> int:
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
     try:
-        report = run_embed_run(args.run_id)
+        report = run_embed(args.run_id)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
