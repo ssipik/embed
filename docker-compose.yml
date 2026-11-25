@@ -20,8 +20,9 @@ services:
     environment:
       # host.docker.internal = the host machine, where the services publish
       RAG_PG_DSN: postgresql+psycopg://rag:rag@host.docker.internal:5433/rag_ingestion
-      # TEI is the cluster job tei-embed, not a local container
-      RAG_TEI_URL: https://tei-embed.service.get
+      # TEI is the cluster job tei-embed, not a local container; the URL comes
+      # from .env (compose interpolation), and an unset value fails the run
+      RAG_TEI_URL: http://host.docker.internal:8080
       SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
       RAG_QDRANT_URL: http://host.docker.internal:6333
       # CPU inference is ~3-5 s per ~1000-token chunk and scales linearly, so a
